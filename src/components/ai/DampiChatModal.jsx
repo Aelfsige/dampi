@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import dampiIcon from "../../assets/dampi.svg";
 import { callDampiChat } from "../../services/ai/dampiApi.js";
-import { CHAT_SYSTEM_PROMPT, CHAT_TASK_ACTION_PROMPT, CHAT_CONTEXT_CONFIG } from "../../constants/dampiAi.js";
+import { CHAT_SYSTEM_PROMPT, CHAT_STRUCTURED_RESPONSE_PROMPT, CHAT_CONTEXT_CONFIG } from "../../constants/dampiAi.js";
 import "../../styles/dampi-chat.css";
 
 const SUGGESTIONS = [
@@ -25,7 +25,6 @@ const SNAP_MAX = 0.92;   // expanded
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 const MARKDOWN_PLUGINS = [remarkGfm];
-const TASK_ACTION_BLOCK_RE = /<task-actions>([\s\S]*?)<\/task-actions>/i;
 const VALID_TASK_TAGS = new Set(["Billing", "Technical", "General", "Urgent", "Other"]);
 const MAX_QUESTION_OPTIONS = 5;
 
@@ -113,12 +112,6 @@ function buildTaskCalendarContext(tasksByDate = {}) {
   return lines.join("\n");
 }
 
-function stripJsonFence(text) {
-  const trimmed = text.trim();
-  const fenceMatch = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
-  return fenceMatch ? fenceMatch[1].trim() : trimmed;
-}
-
 function normalizeTaskForCreation(rawTask) {
   if (!rawTask || typeof rawTask !== "object") return null;
 
@@ -182,30 +175,15 @@ function normalizeQuestionForUi(rawQuestion, idx) {
   return { id, question, options, allowFreeText, inputPlaceholder };
 }
 
-function extractTaskActions(rawText) {
-  const sourceText = typeof rawText === "string" ? rawText : "";
-  const match = TASK_ACTION_BLOCK_RE.exec(sourceText);
+function normalizeTaskActions(rawActions = {}) {
+  const createTasks = Array.isArray(rawActions?.createTasks)
+    ? rawActions.createTasks.map(normalizeTaskForCreation).filter(Boolean)
+    : [];
+  const askQuestions = Array.isArray(rawActions?.askQuestions)
+    ? rawActions.askQuestions.map(normalizeQuestionForUi).filter(Boolean)
+    : [];
 
-  if (!match) {
-    return { visibleText: sourceText, createTasks: [], askQuestions: [] };
-  }
-
-  const withoutBlock = sourceText.replace(match[0], "").trim();
-  const jsonPayload = stripJsonFence(match[1]);
-
-  try {
-    const parsed = JSON.parse(jsonPayload);
-    const createTasks = Array.isArray(parsed?.createTasks)
-      ? parsed.createTasks.map(normalizeTaskForCreation).filter(Boolean)
-      : [];
-    const askQuestions = Array.isArray(parsed?.askQuestions)
-      ? parsed.askQuestions.map(normalizeQuestionForUi).filter(Boolean)
-      : [];
-
-    return { visibleText: withoutBlock, createTasks, askQuestions };
-  } catch {
-    return { visibleText: withoutBlock, createTasks: [], askQuestions: [] };
-  }
+  return { createTasks, askQuestions };
 }
 
 /** Ask Gemini to generate a short title for the conversation */
@@ -255,7 +233,7 @@ export default function ChatModal({ isOpen, onClose, tasks = {}, setTasks }) {
   const messages = activeChat?.messages || [];
   const taskCalendarContext = useMemo(() => buildTaskCalendarContext(tasks), [tasks]);
   const chatSystemPrompt = useMemo(
-    () => `${CHAT_SYSTEM_PROMPT}\n\n${CHAT_TASK_ACTION_PROMPT}\n\n${taskCalendarContext}`,
+    () => `${CHAT_SYSTEM_PROMPT}\n\n${CHAT_STRUCTURED_RESPONSE_PROMPT}\n\n${taskCalendarContext}`,
     [taskCalendarContext]
   );
 
@@ -441,12 +419,18 @@ export default function ChatModal({ isOpen, onClose, tasks = {}, setTasks }) {
     if (sheetHeight < SNAP_MID) setSheetHeight(SNAP_MID);
 
     try {
-      const responseText = await callDampiChat(historyForApi, requestText, {
+      const response = await callDampiChat(historyForApi, requestText, {
         attachments: currentAttachments,
         systemPrompt: chatSystemPrompt,
       });
 
-      const { visibleText, createTasks, askQuestions } = extractTaskActions(responseText);
+      const responseText = typeof response === "string" ? response : response?.text;
+      const structuredActions = typeof response === "object" && response
+        ? normalizeTaskActions(response.taskActions)
+        : null;
+      const visibleText = responseText || "";
+      const createTasks = structuredActions ? structuredActions.createTasks : [];
+      const askQuestions = structuredActions ? structuredActions.askQuestions : [];
       const tasksToCreate = typeof setTasks === "function" ? createTasks : [];
 
       if (tasksToCreate.length > 0) {
@@ -558,28 +542,21 @@ export default function ChatModal({ isOpen, onClose, tasks = {}, setTasks }) {
         className={`chat-sheet ${isDragging ? "dragging" : ""} ${isClosing ? "closing" : ""}`}
         style={{ height: `${sheetHeight * 100}%` }}
       >
-        {/* Drag handle */}
-        <div
-          className="chat-sheet-handle"
-          onMouseDown={onDragStart}
-          onTouchStart={onDragStart}
-        >
-          <div className="chat-sheet-pill" />
-        </div>
-
+        <div className="chat-sheet-body">
         {/* Header */}
         <div className="chat-modal-header">
           <button className="chat-header-btn" onClick={() => setShowHistory((v) => !v)} aria-label={showHistory ? "Close chat history" : "Open chat history"}>
             <Menu size={20} />
           </button>
-          <div className="chat-header-title">
-            <span className="chat-header-logo-wrap">
-              <img src={dampiIcon} alt="Dampi" className="chat-header-logo" />
-            </span>
-            <span className="chat-header-copy">
-              <span className="chat-header-eyebrow">Care Assistant</span>
-              <span className="chat-header-name">Dampi</span>
-            </span>
+          <div
+            className="chat-header-title"
+            style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: 'grab' }}
+            onMouseDown={onDragStart}
+            onTouchStart={onDragStart}
+          >
+            <div className="chat-sheet-notch">
+              <div className="chat-sheet-pill" />
+            </div>
           </div>
           <button className="chat-header-btn" onClick={requestClose} aria-label="Close chat">
             <X size={20} />
@@ -775,7 +752,7 @@ export default function ChatModal({ isOpen, onClose, tasks = {}, setTasks }) {
 
         {/* Suggestions accordion */}
         <div className="chat-suggestions">
-          <div className="chat-suggestion-chips">
+          <div className="chat-suggestion-chips" style={{ background: 'transparent' }}>
             {visibleSuggestions.map(({ icon: Icon, label }, i) => (
               <button key={i} className="chat-suggestion-chip" onClick={() => handleSuggestion(label)} disabled={loading}>
                 <Icon size={13} className="chat-suggestion-chip-icon" />
@@ -847,6 +824,7 @@ export default function ChatModal({ isOpen, onClose, tasks = {}, setTasks }) {
         </div>
         </>
         )}
+        </div>
       </div>
     </div>
   );
