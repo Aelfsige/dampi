@@ -8,9 +8,8 @@
     "orientation": "portrait-primary",
     "icons": [
         {
-            "src": "/src/assets/rumpel.png",
-            "type": "image/png",
-            "sizes": "3776x4023"
+            "src": "/src/assets/dampi.svg",
+            "type": "image/svg+xml"
         }
     ]
 }
