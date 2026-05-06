@@ -1,0 +1,16 @@
+{
+    "name": "Dampi",
+    "short_name": "Dampi",
+    "start_url": "/index.html",
+    "display": "standalone",
+    "background_color": "#92BBB3",
+    "theme_color": "#4D736C",
+    "orientation": "portrait-primary",
+    "icons": [
+        {
+            "src": "/src/assets/rumpel.png",
+            "type": "image/png",
+            "sizes": "3776x4023"
+        }
+    ]
+}
