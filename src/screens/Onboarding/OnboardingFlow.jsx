@@ -3,8 +3,8 @@ import WelcomeScreen from './WelcomeScreen.jsx';
 import CreateAccountScreen from './CreateAccountScreen.jsx';
 import AddChildScreen from './AddChildScreen.jsx';
 import InviteFamilyScreen from './InviteFamilyScreen.jsx';
+import TopNavBar from '../../navigation/TopNavBar.jsx';
 import { getSupabaseBrowserClient } from '../../lib/supabase.js';
-import { ChevronLeft } from 'lucide-react';
 import './onboarding.css';
 
 const PENDING_ONBOARDING_KEY = 'dampi.pendingOnboarding';
@@ -328,22 +328,21 @@ export default function OnboardingFlow({ onComplete }) {
 
   return (
     <div className="onboarding-flow">
-      {/* Progress indicator */}
-      <div className="onboarding-progress">
-        {steps.map((s, i) => (
-          <div key={s.id} className={`onboarding-dot ${i <= step ? 'active' : ''}`} />
-        ))}
-      </div>
+      <TopNavBar
+        variant="inner"
+        transparent={true}
+        title={
+          <div className="onboarding-progress">
+            {steps.map((s, i) => (
+              <div key={s.id} className={`onboarding-dot ${i <= step ? 'active' : ''}`} />
+            ))}
+          </div>
+        }
+        onBack={step > 0 ? handleBack : null}
+      />
 
       {/* Screen */}
       <div className="onboarding-screen">{screens[step]}</div>
-
-      {/* Navigation */}
-      {step > 0 && (
-        <button className="onboarding-back" onClick={handleBack} aria-label="Go back">
-          <ChevronLeft size={20} strokeWidth={2.5} />
-        </button>
-      )}
     </div>
   );
 }
