@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import WelcomeScreen from './WelcomeScreen.jsx';
+import TryDampiScreen from './TryDampiScreen.jsx';
 import CreateAccountScreen from './CreateAccountScreen.jsx';
 import AddChildScreen from './AddChildScreen.jsx';
 import HMOCoverageScreen from './HMOCoverageScreen.jsx';
@@ -9,6 +10,15 @@ import { getSupabaseBrowserClient } from '../../lib/supabase.js';
 import './onboarding.css';
 
 const PENDING_ONBOARDING_KEY = 'dampi.pendingOnboarding';
+
+function getAuthDisplayName(user) {
+  return (
+    user?.user_metadata?.full_name ||
+    user?.user_metadata?.name ||
+    user?.user_metadata?.display_name ||
+    ''
+  );
+}
 
 function getPendingOnboarding() {
   try {
@@ -30,10 +40,11 @@ function clearPendingOnboarding() {
 }
 
 export default function OnboardingFlow({ onComplete, onInitialBack }) {
+  const [direction, setDirection] = useState('next');
   const [step, setStep] = useState(() => {
     const saved = window.localStorage.getItem('dampi.onboardingStep');
     const parsed = saved ? parseInt(saved, 10) : 0;
-    return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 0), 4) : 0;
+    return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 0), 5) : 0;
   });
   const [formData, setFormData] = useState(() => {
     const saved = window.localStorage.getItem('dampi.onboardingData');
@@ -55,6 +66,7 @@ export default function OnboardingFlow({ onComplete, onInitialBack }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
+  const [authUser, setAuthUser] = useState(null);
 
   // Persist state changes
   useEffect(() => {
@@ -71,6 +83,39 @@ export default function OnboardingFlow({ onComplete, onInitialBack }) {
     window.localStorage.removeItem('dampi.onboardingData');
     clearPendingOnboarding();
   };
+
+  useEffect(() => {
+    let active = true;
+
+    const loadAuthUser = async () => {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        if (!active) return;
+
+        const user = data.session?.user || null;
+        setAuthUser(user);
+
+        if (user) {
+          setFormData((current) => ({
+            ...current,
+            fullName: current.fullName || getAuthDisplayName(user),
+            email: current.email || user.email || '',
+            password: '',
+          }));
+        }
+      } catch {
+        if (active) setAuthUser(null);
+      }
+    };
+
+    loadAuthUser();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const persistOnboardingAccount = async (supabase, user, data) => {
     const { error: profileError } = await supabase
@@ -208,6 +253,7 @@ export default function OnboardingFlow({ onComplete, onInitialBack }) {
 
   const steps = [
     { id: 'welcome', label: 'Welcome' },
+    { id: 'trydampi', label: 'Try Dampi' },
     { id: 'account', label: 'Create Account' },
     { id: 'child', label: 'Add Child' },
     { id: 'hmo', label: 'HMO Coverage' },
@@ -218,7 +264,7 @@ export default function OnboardingFlow({ onComplete, onInitialBack }) {
     const nextData = { ...formData, ...newData };
     setFormData(nextData);
 
-    if (step === 1) {
+    if (step === 2) {
       setIsSubmitting(true);
       setSubmitError('');
 
@@ -230,10 +276,12 @@ export default function OnboardingFlow({ onComplete, onInitialBack }) {
         if (sessionError) throw sessionError;
 
         let user = sessionData.session?.user || null;
+        setAuthUser(user);
 
         if (user?.email && user.email.toLowerCase() !== email.toLowerCase()) {
           await supabase.auth.signOut();
           user = null;
+          setAuthUser(null);
         }
 
         if (!user) {
@@ -265,12 +313,16 @@ export default function OnboardingFlow({ onComplete, onInitialBack }) {
     }
 
     if (step < steps.length - 1) {
+      setDirection('next');
       setStep(step + 1);
     }
   };
 
   const handleBack = () => {
-    if (step > 0) setStep(step - 1);
+    if (step > 0) {
+      setDirection('back');
+      setStep(step - 1);
+    }
   };
 
   const handleComplete = async (newData = {}) => {
@@ -304,12 +356,14 @@ export default function OnboardingFlow({ onComplete, onInitialBack }) {
 
   const screens = [
     <WelcomeScreen key="welcome" onNext={handleNext} />,
+    <TryDampiScreen key="trydampi" onNext={handleNext} />,
     <CreateAccountScreen
       key="account"
       data={formData}
       onNext={handleNext}
       isSubmitting={isSubmitting}
-      submitError={step === 1 ? submitError : ''}
+      submitError={step === 2 ? submitError : ''}
+      authenticatedEmail={authUser?.email || ''}
     />,
     <AddChildScreen key="child" data={formData} onNext={handleNext} />,
     <HMOCoverageScreen key="hmo" data={formData} onNext={handleNext} />,
@@ -372,7 +426,11 @@ export default function OnboardingFlow({ onComplete, onInitialBack }) {
       />
 
       {/* Screen */}
-      <div className="onboarding-screen">{screens[step]}</div>
+      <div className="onboarding-screen-wrapper">
+        <div key={step} className={`onboarding-screen slide-${direction}`}>
+          {screens[step]}
+        </div>
+      </div>
     </div>
   );
 }
