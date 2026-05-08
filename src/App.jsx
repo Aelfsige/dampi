@@ -56,20 +56,25 @@ export default function App() {
   const [account, setAccount] = useState(null);
   const [hasSession, setHasSession] = useState(false);
   const [authView, setAuthView] = useState('landing');
+  const [showAddChildFlow, setShowAddChildFlow] = useState(false);
   const [accountError, setAccountError] = useState('');
   const [signingOut, setSigningOut] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [tasks, setTasks] = useState({});
   const [symptomLogRequest, setSymptomLogRequest] = useState(null);
   const [pendingInviteToken, setPendingInviteToken] = useState(() => {
-    const urlToken = new URLSearchParams(window.location.search).get('invite');
-    return urlToken || localStorage.getItem('dampi.pendingInviteToken') || null;
+    try {
+      const urlToken = new URLSearchParams(window.location.search).get('invite');
+      return urlToken || window.localStorage.getItem('dampi.pendingInviteToken') || null;
+    } catch {
+      return null;
+    }
   });
 
   useEffect(() => {
     const timer = setTimeout(() => {
       setSplashTimerDone(true);
-    }, 5000);
+    }, 3000);
     return () => clearTimeout(timer);
   }, []);
 
@@ -82,30 +87,40 @@ export default function App() {
       try {
         supabase = getSupabaseBrowserClient();
         const { data, error } = await supabase.auth.getSession();
-        if (error) throw error;
+        
+        if (error) {
+           console.error('Supabase session error:', error);
+        }
+
         if (!active) return;
 
-        const session = data.session;
+        const session = data?.session || null;
         setHasSession(!!session);
 
-        const nextAccount = await loadOnboardingAccount(supabase, session);
+        const nextAccount = session ? await loadOnboardingAccount(supabase, session) : null;
         if (!active) return;
 
         setAccount(nextAccount);
         setAccountError('');
       } catch (error) {
+        console.error('App init error:', error);
         if (active) {
           setAccount(null);
           setHasSession(false);
-          setAccountError(error.message || 'Unable to load your Dampi account.');
+          // Don't block the app with an error message unless it's critical
+          // setAccountError(error.message || 'Unable to load your Dampi account.');
         }
       } finally {
-        if (active) setLoadingAccount(false);
+        if (active) {
+          setLoadingAccount(false);
+          // Force splash timer if account loading was very fast
+          // but we already have a dedicated useEffect for that.
+        }
       }
 
       if (!active || !supabase) return;
 
-      const { data } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, session) => {
         if (!active) return;
 
         try {
@@ -125,12 +140,12 @@ export default function App() {
           setAccountError('');
         } catch (error) {
           if (!active) return;
+          console.error('Auth change account load error:', error);
           setAccount(null);
-          setAccountError(error.message || 'Unable to load your Dampi account.');
         }
       });
 
-      authSubscription = data.subscription;
+      authSubscription = authListener?.subscription;
     };
 
     init();
@@ -158,6 +173,12 @@ export default function App() {
   const handleOnboardingComplete = ({ profile, child, hmoCoverage }) => {
     setAccount({ profile, child, children: child ? [child] : [], hmoCoverage });
     setAccountError('');
+    setShowAddChildFlow(false); // Make sure to exit this mode on full completion
+  };
+
+  const handleAddedChild = (newChild) => {
+    handleChildrenChange((currentChildren) => [...currentChildren, newChild]);
+    setShowAddChildFlow(false);
   };
 
   const handleProfileChange = (profile) => {
@@ -215,9 +236,7 @@ export default function App() {
   if (loadingAccount || !splashTimerDone) {
     return (
       <div className="dampi-app app-state splash-screen">
-        <div className="splash-logo-container">
-          <img src={dampiLogo} alt="Dampi" className="splash-logo" />
-        </div>
+        <img src={dampiLogo} alt="Dampi" className="splash-logo" />
       </div>
     );
   }
@@ -250,6 +269,7 @@ export default function App() {
           onChildrenChange={handleChildrenChange}
           signingOut={signingOut}
           symptomLogRequest={symptomLogRequest}
+          onNavigateToAddChild={() => setShowAddChildFlow(true)}
         />
         <DampiChatModal
           isOpen={chatOpen}
@@ -270,16 +290,24 @@ export default function App() {
 
   return (
     <div className="dampi-app">
-      {!showOnboarding && authView === 'login' && (
+      {!showOnboarding && authView === 'login' && !showAddChildFlow && (
         <LoginScreen onBack={() => setAuthView('landing')} />
       )}
-      {showOnboarding && (
+      {showOnboarding && !showAddChildFlow && (
         <OnboardingFlow
           onComplete={handleOnboardingComplete}
           onInitialBack={!hasSession ? () => setAuthView('landing') : null}
         />
       )}
-      {!showOnboarding && authView === 'landing' && (
+      {showAddChildFlow && (
+        <OnboardingFlow
+          onComplete={handleAddedChild}
+          startAtStep={2} // Start at 'Add Child'
+          isAddingChild
+          onInitialBack={() => setShowAddChildFlow(false)}
+        />
+      )}
+      {!showOnboarding && !showAddChildFlow && authView === 'landing' && (
         <AuthLandingScreen
           onNew={() => setAuthView('onboarding')}
           onExisting={() => setAuthView('login')}

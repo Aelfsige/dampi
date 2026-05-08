@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Thermometer, HeartPulse, Activity, Stethoscope, FileText, History, FileWarning, ChevronDown } from 'lucide-react';
+import { Thermometer, HeartPulse, Activity, Stethoscope, FileText, History, FileWarning, ChevronDown, Copy, Download } from 'lucide-react';
+import { getAssessmentStats } from '../../../services/ai/assessmentAdapter.js';
 
 const NEXT_STEP_LABEL = {
   routine: 'Routine clinic visit',
@@ -17,8 +18,11 @@ function fallback(value, placeholder = 'Not on file') {
   return value && String(value).trim() ? value : placeholder;
 }
 
-export default function Step4Summary({ summary, rawError, profile, reportId, reportDate }) {
+export default function Step4Summary({ summary, rawError, profile, reportId, reportDate, assessmentSession, exports }) {
   const [showRaw, setShowRaw] = useState(false);
+  const [exportFormat, setExportFormat] = useState(null);
+
+  const stats = assessmentSession ? getAssessmentStats(assessmentSession) : null;
 
   if (rawError) {
     return (
@@ -56,8 +60,86 @@ export default function Step4Summary({ summary, rawError, profile, reportId, rep
 
   const { patient, vitalSigns, chiefComplaint, history, examFindings, suggestedNextStep } = summary;
 
+  const handleCopyExport = (format) => {
+    if (!exports || !exports[format]) return;
+    navigator.clipboard.writeText(exports[format]);
+    setExportFormat(format);
+    setTimeout(() => setExportFormat(null), 2000);
+  };
+
+  const handleDownloadExport = (format) => {
+    if (!exports || !exports[format]) return;
+    const element = document.createElement('a');
+    const file = new Blob([exports[format]], { type: 'text/plain' });
+    element.href = URL.createObjectURL(file);
+    element.download = `dampi-assessment-${reportId}.${format === 'json' ? 'json' : 'txt'}`;
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
+  };
+
   return (
     <section className="symptom-log__summary-stack">
+      {/* Assessment Context Stats */}
+      {stats && (
+        <article className="symptom-log__card symptom-log__card--assessment-stats">
+          <header className="symptom-log__card-head">
+            <FileText size={16} />
+            <h3 className="symptom-log__card-title">Assessment Statistics</h3>
+          </header>
+          <div className="symptom-log__stats-grid">
+            <div className="symptom-log__stat-box">
+              <p className="symptom-log__stat-label">Exam Steps Generated</p>
+              <p className="symptom-log__stat-value">{stats.examStepsGenerated}</p>
+            </div>
+            <div className="symptom-log__stat-box">
+              <p className="symptom-log__stat-label">Findings Documented</p>
+              <p className="symptom-log__stat-value">{stats.checklistItemsAnswered}/{stats.checklistItemsGenerated}</p>
+            </div>
+            <div className="symptom-log__stat-box">
+              <p className="symptom-log__stat-label">Completeness</p>
+              <p className="symptom-log__stat-value">{stats.completionPercentage}%</p>
+            </div>
+            <div className="symptom-log__stat-box">
+              <p className="symptom-log__stat-label">Symptom Category</p>
+              <p className="symptom-log__stat-value">{stats.category}</p>
+            </div>
+          </div>
+        </article>
+      )}
+
+      {/* Provider Export Options */}
+      {exports && (
+        <article className="symptom-log__card symptom-log__card--exports">
+          <header className="symptom-log__card-head">
+            <Download size={16} />
+            <h3 className="symptom-log__card-title">Provider Export</h3>
+          </header>
+          <p className="symptom-log__export-desc">
+            Ready to share with healthcare provider or HMO.
+          </p>
+          <div className="symptom-log__export-buttons">
+            <button
+              type="button"
+              className={`symptom-log__export-btn${exportFormat === 'json' ? ' --copied' : ''}`}
+              onClick={() => handleCopyExport('json')}
+              title="Copy JSON to clipboard"
+            >
+              <Copy size={14} />
+              <span>{exportFormat === 'json' ? 'Copied!' : 'Copy JSON'}</span>
+            </button>
+            <button
+              type="button"
+              className="symptom-log__export-btn"
+              onClick={() => handleDownloadExport('text')}
+              title="Download as text file"
+            >
+              <Download size={14} />
+              <span>Download Text</span>
+            </button>
+          </div>
+        </article>
+      )}
       <header className="symptom-log__summary-header">
         <div>
           <h2 className="symptom-log__summary-h">Clinical Summary</h2>

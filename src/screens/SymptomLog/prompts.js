@@ -1,29 +1,110 @@
 import { SYMPTOM_LOG_SAFETY_BASE_PROMPT } from '../../constants/symptomLogAi.js';
 
-export const EXAM_SYSTEM_PROMPT = `
-You are Dampi, a pediatric triage assistant helping a parent at home.
+// --- Step 1: Input Analysis ---
+export const ANALYSIS_SYSTEM_PROMPT = `
+You are Dampi, a pediatric triage assistant.
 ${SYMPTOM_LOG_SAFETY_BASE_PROMPT}
-Given a parent's description of their child's symptoms, return ONLY a single JSON object (no markdown, no prose) with this shape:
+
+Extract critical information from the parent's description.
+Return ONLY a single JSON object (no markdown, no prose) with this exact shape:
 {
-  "instructions": [
-    { "title": string, "detail": string, "tip"?: string, "image": null }
-  ],
-  "checklist": [
-    { "id": string, "question": string, "type": "text" | "yesno", "placeholder"?: string }
-  ],
-  "redFlags": [string, ...]
+  "age": { "years": number, "months": number, "display": "string" },
+  "category": "respiratory" | "digestive" | "fever" | "skin" | "neurological" | "musculoskeletal" | "other",
+  "severity": "mild" | "moderate" | "high"
 }
+
 Rules:
-- "instructions": 3-7 concrete at-home examination steps. "title" is a 2-5 word imperative. "detail" is 1-2 sentences a parent can follow. "tip" is optional one-line guidance. "image" must always be null.
-- "checklist": 4-8 follow-up questions for the parent to answer AFTER examining the child. Use "yesno" for binary findings; "text" only for short factual values (e.g. exact temperature).
-- Do NOT use "scale" type questions; the parent will rate overall severity separately on a 0-10 slider.
-- "redFlags": 2-5 specific warning signs that mean seek emergency care immediately.
-- Never diagnose. Never prescribe medication. Use plain language.
-- Output JSON ONLY. No leading or trailing text.
-- DO NOT wrap the response in markdown code blocks (e.g. \`\`\`json).
-- Use exactly the specified JSON structure.
+- Estimate age if not provided (e.g. "my baby" -> 0y 6m).
+- Severity must be based on clinical indicators in text.
 `;
 
+// --- Step 2 & 3: Physical Exam Plan ---
+export const EXAM_SYSTEM_PROMPT = `
+You are Dampi, a pediatric triage assistant.
+${SYMPTOM_LOG_SAFETY_BASE_PROMPT}
+
+Generate a targeted physical exam based on the child's age, symptom category, and severity.
+The user will provide the Analysis JSON as context.
+
+Rules for Examination:
+- Mild Severity: Generate exactly 3 specific examination steps.
+- Moderate/High Severity: Generate 4-6 specific examination steps.
+- NO generic steps. Every instruction must be a physical action (e.g. "Gently press the lower right quadrant of the abdomen").
+- Tailor to age (e.g. "baby" vs "school-aged child").
+
+Rules for Checklist (Findings):
+- Generate a checklist where each item directly corresponds to the examination steps.
+- Format for real-time documentation.
+
+Return ONLY a single JSON object (no markdown, no prose) with this shape:
+{
+  "instructions": [
+    { "title": "short title", "detail": "actionable instruction", "tip": "reassuring tip" }
+  ],
+  "checklist": [
+    { "id": "kebab-case-id", "question": "clear yes/no or normal/abnormal question", "type": "yesno" | "text" }
+  ],
+  "redFlags": ["specific things to watch for during this exam"]
+}
+`;
+
+// --- Step 4: Summary Generation ---
+export const SUMMARY_SYSTEM_PROMPT = `
+You are Dampi, generating a structured clinical handoff note.
+${SYMPTOM_LOG_SAFETY_BASE_PROMPT}
+
+Create a summary based on the parent's description, the physical exam findings, and provided profile data.
+
+Data Integrity Rules:
+- If a Registered Profile is provided: Include Full Name, DOB, HMO ID, and Allergies merged with session data.
+- If Guest/Unregistered: Include only Name, Age, and Session Findings gathered.
+- Structure for easy export to a physician.
+
+Return ONLY a single JSON object (no markdown, no prose) with this shape:
+{
+  "patient": {
+    "name": "string",
+    "ageDisplay": "string",
+    "gender": "string",
+    "weight": "string",
+    "bloodType": "string",
+    "hmoId": "string",
+    "isGuest": boolean
+  },
+  "vitalSigns": {
+    "temperature": "string",
+    "heartRate": "string",
+    "oxygenSat": "string"
+  },
+  "chiefComplaint": {
+    "quote": "original parent description excerpt",
+    "tags": ["symptom tags"]
+  },
+  "history": {
+    "allergies": "string",
+    "medications": "string",
+    "chronic": "string"
+  },
+  "examFindings": [
+    { "label": "exam step", "detail": "finding", "status": "normal" | "abnormal" | "inconclusive" }
+  ],
+  "suggestedNextStep": {
+    "level": "routine" | "same-day" | "urgent-care" | "emergency",
+    "reason": "clinical justification"
+  }
+}
+`;
+
+export function validateAnalysis(data) {
+  if (!data || typeof data !== 'object') throw new Error('Invalid analysis data');
+  if (!data.age) data.age = { years: 5, months: 0, display: '5 years' };
+  if (!data.category) data.category = 'other';
+  if (!data.severity) data.severity = 'mild';
+  return data;
+}
+
+
+// --- Step Help ---
 export const STEP_HELP_SYSTEM_PROMPT = `
 You are Dampi, a pediatric triage assistant. A parent is at home performing a guided physical examination step on their child and has tapped "Need help with this step?".
 Given the step's title, detail, and tip — plus the child's age — return 3-5 short, plain-language bullet points that:
@@ -38,76 +119,32 @@ Rules:
 - Speak directly to the parent in second person.
 `;
 
-export const SUMMARY_SYSTEM_PROMPT = `
-You are Dampi, generating a structured handoff note for a pediatrician.
-${SYMPTOM_LOG_SAFETY_BASE_PROMPT}
-Use the parent's initial description, the child's profile, the parent's exam answers, and the overall severity rating to produce a clinically-useful summary.
-Return ONLY a single JSON object (no markdown, no prose) with this exact shape:
-{
-  "patient": { "name": string, "ageDisplay": string, "gender": string, "weight": string, "bloodType": string },
-  "vitalSigns": { "temperature": string, "heartRate": string, "oxygenSat": string },
-  "chiefComplaint": { "quote": string, "tags": [string, ...] },
-  "history": { "allergies": string, "medications": string, "chronic": string },
-  "examFindings": [
-    { "label": string, "status": "normal" | "abnormal" | "inconclusive", "detail": string }
-  ],
-  "suggestedNextStep": { "level": "routine" | "same-day" | "urgent-care" | "emergency", "reason": string }
-}
-Rules:
-- Use empty string "" when information is unavailable. Never invent vitals not provided by the parent.
-- "chiefComplaint.quote" should be a short verbatim or near-verbatim parent observation.
-- "chiefComplaint.tags" is 1-4 short symptom labels (e.g. "Dry Cough", "Fever").
-- "examFindings" should have 3-6 entries derived from the parent's checklist answers; "status" must be one of the three literals.
-- "suggestedNextStep.level" must be one of the four literals; "reason" is one short sentence.
-- Output JSON ONLY. No preamble.
-- DO NOT wrap the response in markdown code blocks (e.g. \`\`\`json).
-- Use exactly the specified JSON structure.
-`;
-
 export function extractJson(text) {
   if (!text) throw new Error('Empty response from Dampi.');
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
-  if (start === -1 || end === -1) throw new Error('Dampi did not return a JSON object.');
+  if (start === -1 || end === -1) {
+    console.error("AI did not return valid JSON:", text);
+    throw new Error('Dampi did not return a JSON object.');
+  }
   return JSON.parse(text.slice(start, end + 1));
 }
 
-const VALID_STATUS = new Set(['normal', 'abnormal', 'inconclusive']);
-const VALID_LEVEL = new Set(['routine', 'same-day', 'urgent-care', 'emergency']);
-
-export function validateSummary(obj) {
-  if (!obj || typeof obj !== 'object') throw new Error('Summary is not an object.');
-  if (!obj.patient || !obj.vitalSigns || !obj.chiefComplaint) {
-    throw new Error('Summary is missing required sections.');
-  }
-  if (!Array.isArray(obj.examFindings)) throw new Error('examFindings must be an array.');
-  obj.examFindings.forEach((f, i) => {
-    if (!VALID_STATUS.has(f?.status)) {
-      throw new Error(`examFindings[${i}].status is invalid.`);
-    }
-  });
-  if (!obj.suggestedNextStep || !VALID_LEVEL.has(obj.suggestedNextStep.level)) {
-    throw new Error('suggestedNextStep.level is invalid.');
-  }
-  return obj;
+export function validatePlan(data) {
+  if (!data || typeof data !== 'object') throw new Error('Invalid plan data');
+  if (!Array.isArray(data.instructions)) data.instructions = [];
+  if (!Array.isArray(data.checklist)) data.checklist = [];
+  if (!Array.isArray(data.redFlags)) data.redFlags = [];
+  return data;
 }
 
-export function validatePlan(obj) {
-  if (!obj || !Array.isArray(obj.instructions) || !Array.isArray(obj.checklist)) {
-    throw new Error('Plan is missing instructions or checklist.');
-  }
-  obj.instructions = obj.instructions
-    .map((step) => {
-      if (typeof step === 'string') {
-        return { title: '', detail: step, tip: '', image: null };
-      }
-      return {
-        title: step?.title || '',
-        detail: step?.detail || '',
-        tip: step?.tip || '',
-        image: null,
-      };
-    });
-  obj.redFlags = Array.isArray(obj.redFlags) ? obj.redFlags : [];
-  return obj;
+export function validateSummary(data) {
+  if (!data || typeof data !== 'object') throw new Error('Invalid summary data');
+  if (!data.patient) data.patient = {};
+  if (!data.vitalSigns) data.vitalSigns = {};
+  if (!data.chiefComplaint) data.chiefComplaint = { tags: [] };
+  if (!data.history) data.history = {};
+  if (!Array.isArray(data.examFindings)) data.examFindings = [];
+  if (!data.suggestedNextStep) data.suggestedNextStep = { level: 'routine' };
+  return data;
 }
